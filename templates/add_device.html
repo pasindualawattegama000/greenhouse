@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">Add New Device</div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('add_device') }}">
+                        <div class="mb-3">
+                            <label for="device_id" class="form-label">Device ID</label>
+                            <input type="text" class="form-control" id="device_id" name="device_id" required>
+                            <div class="form-text">Enter the unique ID of your ESP32 device</div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Add Device</button>
+                        <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}

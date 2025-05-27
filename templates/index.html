@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h2 class="mb-4">Your Greenhouses</h2>
+    </div>
+</div>
+
+<div class="row" id="devices-container">
+    {% for device in devices %}
+    <div class="col-md-6 col-lg-4">
+        <div class="card device-card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>{{ device.device_name }}</span>
+                <span class="badge bg-secondary">{{ device.device_id }}</span>
+            </div>
+            <div class="card-body">
+                <div class="mb-4">
+                    <h5 class="card-title">Sensor Reading</h5>
+                    <div class="sensor-value text-center my-3" id="sensor-{{ device.device_id }}">
+                        {{ "%.2f"|format(device.last_value) if device.last_value is not none else "N/A" }}
+                    </div>
+                    <div class="progress">
+                        <div class="progress-bar" role="progressbar" 
+                   
+                             id="progress-{{ device.device_id }}"></div>
+                    </div>
+                </div>
+                
+                <div class="mb-4">
+                    <h5 class="card-title">LED Control</h5>
+                    <div class="btn-group w-100" role="group">
+                        <button type="button" class="btn btn-success" 
+                                onclick="controlLED('{{ device.device_id }}', true)">
+                            <i class="bi bi-power"></i> Turn ON
+                        </button>
+                        <button type="button" class="btn btn-danger" 
+                                onclick="controlLED('{{ device.device_id }}', false)">
+                            <i class="bi bi-power-off"></i> Turn OFF
+                        </button>
+                    </div>
+                    <div class="mt-2">
+                        Status: 
+                        <span class="led-indicator {% if device.led_state %}led-on{% else %}led-off{% endif %}" 
+                              id="led-indicator-{{ device.device_id }}"></span>
+                        <span id="led-status-{{ device.device_id }}">
+                            {{ 'ON' if device.led_state else 'OFF' }}
+                        </span>
+                    </div>
+                </div>
+                
+                <div>
+                    <h5 class="card-title">Sensor History</h5>
+                    <div class="chart-container">
+                        <canvas id="chart-{{ device.device_id }}"></canvas>
+                    </div>
+                    <button class="btn btn-sm btn-outline-primary w-100 mt-2" 
+                            onclick="loadHistory('{{ device.device_id }}')">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh History
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="col-12">
+        <div class="alert alert-info">
+            You don't have any devices yet. Add your first device to get started!
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Add Device Button -->
+{% if 'user_id' in session %}
+<button class="btn btn-primary add-device-btn" data-bs-toggle="modal" data-bs-target="#addDeviceModal">
+    <i class="bi bi-plus-lg"></i>
+</button>
+{% endif %}
+
+<!-- Add Device Modal -->
+<div class="modal fade" id="addDeviceModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add New Device</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addDeviceForm">
+                    <div class="mb-3">
+                        <label for="deviceId" class="form-label">Device ID</label>
+                        <input type="text" class="form-control" id="deviceId" name="device_id" required>
+                        <div class="form-text">Unique identifier for your device</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="deviceName" class="form-label">Device Name</label>
+                        <input type="text" class="form-control" id="deviceName" name="device_name" required>
+                        <div class="form-text">Friendly name for your device</div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" onclick="addDevice()">Add Device</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Initialize Socket.IO
+    const socket = io();
+    
+    // Store chart instances
+    const charts = {};
+    
+    // Handle sensor updates
+    socket.on('sensor_update', function(data) {
+        const element = document.getElementById(`sensor-${data.device_id}`);
+        const progress = document.getElementById(`progress-${data.device_id}`);
+        
+        if (element) {
+            element.textContent = parseFloat(data.value).toFixed(2);
+        }
+        
+        if (progress) {
+            const percentage = (parseFloat(data.value) / 4095 * 100);
+            progress.style.width = `${percentage}%`;
+            
+            // Change color based on value
+            if (percentage > 80) {
+                progress.classList.add('bg-danger');
+                progress.classList.remove('bg-warning', 'bg-success');
+            } else if (percentage > 50) {
+                progress.classList.add('bg-warning');
+                progress.classList.remove('bg-danger', 'bg-success');
+            } else {
+                progress.classList.add('bg-success');
+                progress.classList.remove('bg-danger', 'bg-warning');
+            }
+        }
+        
+        // Update chart if exists
+        if (charts[data.device_id]) {
+            const chart = charts[data.device_id];
+            const now = new Date(data.timestamp);
+            
+            // Add new data point
+            chart.data.labels.push(now.toLocaleTimeString());
+            chart.data.datasets[0].data.push(data.value);
+            
+            // Remove oldest point if too many
+            if (chart.data.labels.length > 20) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+            }
+            
+            chart.update();
+        }
+    });
+    
+    // Handle LED status updates
+    socket.on('led_status_update', function(data) {
+        const indicator = document.getElementById(`led-indicator-${data.device_id}`);
+        const status = document.getElementById(`led-status-${data.device_id}`);
+        
+        if (indicator && status) {
+            if (data.status) {
+                indicator.classList.add('led-on');
+                indicator.classList.remove('led-off');
+                status.textContent = 'ON';
+            } else {
+                indicator.classList.add('led-off');
+                indicator.classList.remove('led-on');
+                status.textContent = 'OFF';
+            }
+        }
+    });
+    
+    // Control LED function
+    function controlLED(device_id, state) {
+        fetch('/control_led', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({device_id, state})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status !== 'success') {
+                alert('Error controlling LED');
+            }
+        });
+    }
+    
+    // Add new device
+    function addDevice() {
+        const form = document.getElementById('addDeviceForm');
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData.entries());
+        
+        fetch('/add_device', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: new URLSearchParams(data)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                location.reload(); // Refresh to show new device
+            } else {
+                alert('Error adding device: ' + data.message);
+            }
+        });
+    }
+    
+    // Load sensor history and create chart
+    function loadHistory(device_id) {
+        fetch(`/get_sensor_history/${device_id}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                createChart(device_id, data.readings);
+            }
+        });
+    }
+    
+    // Create chart for a device
+    function createChart(device_id, readings) {
+        const ctx = document.getElementById(`chart-${device_id}`);
+        
+        // Prepare data
+        const labels = readings.map(r => new Date(r.recorded_at).toLocaleTimeString());
+        const values = readings.map(r => r.value);
+        
+        // Destroy existing chart if it exists
+        if (charts[device_id]) {
+            charts[device_id].destroy();
+        }
+        
+        // Create new chart
+        charts[device_id] = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Sensor Value',
+                    data: values,
+                    borderColor: '#3498db',
+                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    tension: 0.1,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 4095
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+    }
+    
+    // Initialize charts for all devices on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        {% for device in devices %}
+            loadHistory('{{ device.device_id }}');
+        {% endfor %}
+    });
+</script>
+{% endblock %}
